@@ -1,15 +1,15 @@
-# Paper Downloader
+# Paper Downloader 📜
 
 This repository provides a simple tool for downloading free scientific papers based on a structured
 index of papers stored in `index.md`. The repository contains the following files:
 
-## Features
+## ✨ Features
 
-- Download papers from URLs specified in `index.md`.
-- Organize downloaded papers into folders based on categories.
-- Easy-to-use and lightweight tool for researchers and students.
+- 💾 Download papers from URLs specified in `index.md`.
+- 🗂️ Organize downloaded papers into folders based on categories.
+- ⚡ Easy-to-use and lightweight tool for researchers and students.
 
-## Getting Started
+## 🚀 Getting Started 
 
 ### Prerequisites
 
