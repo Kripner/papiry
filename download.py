@@ -76,8 +76,9 @@ def download_index(index: list[Paper], existing: dict[str, Path], output_dir: Pa
             print(f"WARN: No URL for paper {paper.filename} in section {paper.section}")
             continue
         pdf_urls = [get_pdf_url(url) for url in paper.links]
+        pdf_urls = [u for u in pdf_urls if u is not None]
         if len(pdf_urls) == 0:
-            print(f"Cannot resolve any download URL for {paper.filename}")
+            print(f"Cannot resolve any download URL for {paper.filename} from paper URLs: {", ".join(paper.links)}")
             continue
         download_and_merge_pdfs(pdf_urls, output_path)
 
@@ -90,6 +91,8 @@ def get_pdf_url(paper_url: str) -> str | None:
         return paper_url
     if paper_url.startswith("https://arxiv.org/abs/"):
         return paper_url.replace("/abs/", "/pdf/")
+    if paper_url.startswith("https://arxiv.org/pdf/"):
+        return paper_url
     if paper_url.startswith("https://www.nature.com/articles/"):
         return paper_url + ".pdf"
     if paper_url.startswith("https://openreview.net/forum?id="):
