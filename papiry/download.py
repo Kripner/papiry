@@ -9,6 +9,13 @@ from requests.adapters import HTTPAdapter
 from pypdf import PdfReader, PdfWriter
 
 
+# TODO: Inspired by https://github.com/metachris/pdfx/blob/master/pdfx/extractor.py, extract references from a paper
+# TODO: symlinks
+# TODO: search
+# TODO: nested sections
+# TODO: notes
+# TODO: web interface
+
 class Logger:
     """Singleton logger class for consistent logging throughout the application."""
     _instance = None
@@ -35,15 +42,19 @@ parser = argparse.ArgumentParser()
 parser.add_argument("index_file", type=Path, default="papiry.md", nargs="?")
 parser.add_argument("--output_dir", type=Path, default="pdf")
 
-
-# TODO: Inspired by https://github.com/metachris/pdfx/blob/master/pdfx/extractor.py, extract references from a paper
-# TODO: symlinks
+@dataclass
+class Section:
+    name: str
+    level: int
 
 @dataclass
 class Paper:
     filename: str
-    section: str | None
+    sections: list[Section]
     links: list[str]
+
+    def __str__(self) -> str:
+        return f"{"/".join([section.name for section in self.sections] + [self.filename])}"
 
 @dataclass
 class Index:
@@ -53,22 +64,27 @@ class Index:
 def read_index(index_file: Path) -> Index:
     papers = []
     with open(index_file, "r") as f:
-        section = None
+        sections = []
         for i, line in enumerate(f):
             if line.startswith("%"):
                 continue
             line = line.strip()
 
             if line.startswith("#"):
-                new_section = find_inside_brackets(line[1:])
-                if new_section is not None:
-                    section = new_section
+                level = len(line) - len(line.lstrip("#"))
+                name = find_inside_brackets(line[level:])
+                if name is None:
+                    continue
+
+                while sections and sections[-1].level >= level:
+                    sections.pop()
+                sections.append(Section(name, level))
             elif line.startswith("-"):
                 filename = find_inside_brackets(line[1:])
                 if filename is None:
                     continue
                 urls = find_urls(line[1:])
-                papers.append(Paper(filename, section, urls))
+                papers.append(Paper(filename, sections.copy(), urls))
     return Index(papers)
 
 
@@ -95,7 +111,12 @@ def read_existing(output_dir: Path) -> dict[str, Path]:
 
 def download_index(index: Index, existing: dict[str, Path], output_dir: Path):
     for paper in index.papers:
-        output_path = output_dir / (paper.section or "") / (paper.filename + ".pdf" if not paper.filename.endswith(".pdf") else paper.filename)
+        output_path = (
+            output_dir /
+            Path(*[section.name for section in paper.sections]) /
+            (paper.filename + ".pdf" if not paper.filename.endswith(".pdf") else paper.filename)
+        )
+
         if output_path.exists():
             continue
         if paper.filename in existing:
@@ -104,7 +125,7 @@ def download_index(index: Index, existing: dict[str, Path], output_dir: Path):
             existing[paper.filename].rename(output_path)
             continue
         if len(paper.links) == 0:
-            logger.warn(f"No URL found for paper {paper.filename} in section {paper.section}")
+            logger.warn(f"No URL found for paper {paper}")
             continue
         pdf_urls = [get_pdf_url(url) for url in paper.links]
         pdf_urls = [u for u in pdf_urls if u is not None]
@@ -121,13 +142,13 @@ def get_pdf_url(paper_url: str) -> str | None:
             or paper_url.startswith("https://dl.acm.org/doi/pdf")
     ):
         return paper_url
-    if paper_url.startswith("https://arxiv.org/abs/"):
+    if paper_url.startswith("https://arxiv.org/abs/") or paper_url.startswith("https://www.arxiv.org/abs/"):
         return paper_url.replace("/abs/", "/pdf/")
-    if paper_url.startswith("https://arxiv.org/pdf/"):
+    if paper_url.startswith("https://arxiv.org/pdf/") or paper_url.startswith("https://www.arxiv.org/pdf/"):
         return paper_url
-    if paper_url.startswith("https://www.nature.com/articles/"):
+    if paper_url.startswith("https://nature.com/articles/") or paper_url.startswith("https://www.nature.com/articles/"):
         return paper_url + ".pdf"
-    if paper_url.startswith("https://openreview.net/forum?id="):
+    if paper_url.startswith("https://openreview.net/forum?id=") or paper_url.startswith("https://www.openreview.net/forum?id="):
         return paper_url.replace("/forum", "/pdf")
     return None
 
