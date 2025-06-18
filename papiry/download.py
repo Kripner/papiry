@@ -7,37 +7,44 @@ import requests
 from pypdf import PdfReader, PdfWriter
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--index_file", type=Path, default="index.md")
+parser.add_argument("index_file", type=Path, default="papiry.md", nargs="?")
 parser.add_argument("--output_dir", type=Path, default="pdf")
 
 
+# TODO: Inspired by https://github.com/metachris/pdfx/blob/master/pdfx/extractor.py, extract references from a paper
 # TODO: symlinks
 
 @dataclass
 class Paper:
     filename: str
-    section: str
+    section: str | None
     links: list[str]
 
+@dataclass
+class Index:
+    papers: list[Paper]
 
-def read_index(index_file: Path) -> list[Paper]:
-    index = []
+
+def read_index(index_file: Path) -> Index:
+    papers = []
     with open(index_file, "r") as f:
-        section = ""
+        section = None
         for i, line in enumerate(f):
             if line.startswith("%"):
                 continue
+            line = line.strip()
 
             if line.startswith("#"):
-                section = find_inside_brackets(line[1:])
+                new_section = find_inside_brackets(line[1:])
+                if new_section is not None:
+                    section = new_section
             elif line.startswith("-"):
                 filename = find_inside_brackets(line[1:])
                 if filename is None:
-                    print(f"WARN: Cannot extract paper filename from line {i + 1} in {index_file}")
                     continue
                 urls = find_urls(line[1:])
-                index.append(Paper(filename, section, urls))
-    return index
+                papers.append(Paper(filename, section, urls))
+    return Index(papers)
 
 
 def find_urls(s: str) -> list[str]:
@@ -59,12 +66,11 @@ def read_existing(output_dir: Path) -> dict[str, Path]:
             raise f"Duplicate filename {name} ({f} and {existing[name]})"
         existing[name] = f
     return existing
-    # print("\n".join([f"{k} -> {v}" for k,v in existing.items()]))
 
 
-def download_index(index: list[Paper], existing: dict[str, Path], output_dir: Path):
-    for paper in index:
-        output_path = output_dir / paper.section / (paper.filename + ".pdf")
+def download_index(index: Index, existing: dict[str, Path], output_dir: Path):
+    for paper in index.papers:
+        output_path = output_dir / (paper.section or "") / (paper.filename + ".pdf" if not paper.filename.endswith(".pdf") else paper.filename)
         if output_path.exists():
             continue
         if paper.filename in existing:
@@ -73,7 +79,7 @@ def download_index(index: list[Paper], existing: dict[str, Path], output_dir: Pa
             existing[paper.filename].rename(output_path)
             continue
         if len(paper.links) == 0:
-            print(f"WARN: No URL for paper {paper.filename} in section {paper.section}")
+            print(f"WARN: No URL found for paper {paper.filename} in section {paper.section}")
             continue
         pdf_urls = [get_pdf_url(url) for url in paper.links]
         pdf_urls = [u for u in pdf_urls if u is not None]
@@ -112,7 +118,7 @@ def download_and_merge_pdfs(pdf_urls: list[str], output_path: Path):
         download_pdf(pdf_url, part_path)
         parts_paths.append(part_path)
 
-    print(f"Merging {[p.name for p in parts_paths]} -> {output_path.name}")
+    print(f"Merging {", ".join([p.name for p in parts_paths])} -> {output_path.name}")
     merge_pdfs(output_path, parts_paths)
 
     for part_path in parts_paths:
@@ -123,7 +129,6 @@ def merge_pdfs(output_path, pdf_paths):
     writer = PdfWriter()
 
     for pdf_path in pdf_paths:
-        print(pdf_path)
         reader = PdfReader(pdf_path)
         for page in reader.pages:
             writer.add_page(page)
@@ -163,16 +168,56 @@ def download_pdf(pdf_url: str, output_path: Path):
         print("Response Content (first 500 characters):")
         print(response.text[:500])
 
+def create_example_index_file(index_file: Path):
+    content = """
+This is an example index file for papiry. Any format is allowed! (but Markdown is recommended)
 
-def main(args):
-    output_dir = (Path(__file__).parent / args.output_dir).resolve()
-    index_file = (Path(__file__).parent / args.index_file).resolve()
+It works like this:
+- If a bullet point contains something in square brackets, it is a paper. It should contain a download URL.
+- If a section name contains something in square brackets, any papers inside of it will be categorized into a corresponding subdirectory. 
+
+Have fun!
+
+# [ModelBasedRL] Model-based RL
+
+- [AlphaZero] Mastering Chess and Shogi by Self-Play with a General Reinforcement Learning Algorithm: https://arxiv.org/abs/1712.01815
+- [PlaNet] Learning Latent Dynamics for Planning from Pixels: https://arxiv.org/abs/1811.04551
+- [MuZero] Mastering Atari, Go, Chess and Shogi by Planning with a Learned Model: https://arxiv.org/abs/1911.08265
+
+# [NTP] Neural Theorem Proving
+
+- [HTPS] HyperTree Proof Search for Neural Theorem Proving: https://openreview.net/pdf?id=J4pX8Q8cxHH + https://openreview.net/attachment?id=J4pX8Q8cxHH&name=supplementary_material
+- [AlphaGeometry1] Solving olympiad geometry without human demonstrations: https://www.nature.com/articles/s41586-023-06747-5.pdf
+""".lstrip()
+    with open(index_file, "w") as f:
+        f.write(content)
+
+def run(args):
+    output_dir = args.output_dir.resolve()
+    index_file = args.index_file.resolve()
+
+    if not index_file.exists():
+        print(f"Index file does not exist: {index_file}")
+        if not index_file.parent.exists():
+            print(f"Won't create the index file since the directory does not exist: {index_file.parent}")
+            return
+        print(f"Creating example index file... Run `papiry` again to download the papers.")
+        create_example_index_file(index_file)
+        return
+
+    if not output_dir.exists():
+        print(f"Output directory does not exist: {output_dir}")
+        return
 
     index = read_index(index_file)
     existing = read_existing(output_dir)
-    print(f"Found {len(index)} papers in {index_file}, will download missing ones to {output_dir}...")
+    print(f"Found {len(index.papers)} papers in {index_file}, will download missing ones to {output_dir}...")
     download_index(index, existing, output_dir)
 
+def main():
+    """Entry point for the papiry command."""
+    args = parser.parse_args()
+    run(args)
 
 if __name__ == "__main__":
-    main(parser.parse_args())
+    main()
