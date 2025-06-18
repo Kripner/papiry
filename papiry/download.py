@@ -2,8 +2,10 @@ import argparse
 from dataclasses import dataclass
 from pathlib import Path
 import re
+import ssl
 
 import requests
+from requests.adapters import HTTPAdapter
 from pypdf import PdfReader, PdfWriter
 
 parser = argparse.ArgumentParser()
@@ -84,7 +86,7 @@ def download_index(index: Index, existing: dict[str, Path], output_dir: Path):
         pdf_urls = [get_pdf_url(url) for url in paper.links]
         pdf_urls = [u for u in pdf_urls if u is not None]
         if len(pdf_urls) == 0:
-            print(f"Cannot resolve any download URL for {paper.filename} from paper URLs: {", ".join(paper.links)}")
+            print(f"WARN: Cannot resolve any download URL for {paper.filename} from paper URLs: {", ".join(paper.links)}")
             continue
         download_and_merge_pdfs(pdf_urls, output_path)
 
@@ -139,7 +141,20 @@ def merge_pdfs(output_path, pdf_paths):
 
 def download_pdf(pdf_url: str, output_path: Path):
     print(f"Downloading {pdf_url} to {output_path}...")
+    
+    # Create SSL context that allows legacy renegotiation.
+    ssl_context = ssl.create_default_context()
+    ssl_context.options |= 0x4  # OP_LEGACY_SERVER_CONNECT
+    
     session = requests.Session()
+    
+    class SSLAdapter(HTTPAdapter):
+        def init_poolmanager(self, *args, **kwargs):
+            kwargs["ssl_context"] = ssl_context
+            return super().init_poolmanager(*args, **kwargs)
+    
+    session.mount("https://", SSLAdapter())
+    
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
