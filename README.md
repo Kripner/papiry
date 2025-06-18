@@ -77,10 +77,6 @@ output/
    └── AlphaZero.pdf
 ```
 
-## License
-
-This project is released to the public domain. You are free to use, modify, and distribute this code without any restrictions.
-
 ## Contributing
 
 Contributions are welcome! Please submit a pull request or open an issue to discuss potential improvements.
