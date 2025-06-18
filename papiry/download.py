@@ -8,6 +8,29 @@ import requests
 from requests.adapters import HTTPAdapter
 from pypdf import PdfReader, PdfWriter
 
+
+class Logger:
+    """Singleton logger class for consistent logging throughout the application."""
+    _instance = None
+    
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(Logger, cls).__new__(cls)
+        return cls._instance
+    
+    def info(self, message: str):
+        print(message)
+    
+    def warn(self, message: str):
+        print(f"\033[33m{message}\033[0m")
+    
+    def error(self, message: str):
+        print(f"\033[31m{message}\033[0m")
+
+
+# Create global logger instance
+logger = Logger()
+
 parser = argparse.ArgumentParser()
 parser.add_argument("index_file", type=Path, default="papiry.md", nargs="?")
 parser.add_argument("--output_dir", type=Path, default="pdf")
@@ -76,17 +99,17 @@ def download_index(index: Index, existing: dict[str, Path], output_dir: Path):
         if output_path.exists():
             continue
         if paper.filename in existing:
-            print(f"Moving {existing[paper.filename]} to {output_path}...")
+            logger.info(f"Moving {existing[paper.filename]} to {output_path}...")
             output_path.parent.mkdir(parents=True, exist_ok=True)
             existing[paper.filename].rename(output_path)
             continue
         if len(paper.links) == 0:
-            print(f"WARN: No URL found for paper {paper.filename} in section {paper.section}")
+            logger.warn(f"No URL found for paper {paper.filename} in section {paper.section}")
             continue
         pdf_urls = [get_pdf_url(url) for url in paper.links]
         pdf_urls = [u for u in pdf_urls if u is not None]
         if len(pdf_urls) == 0:
-            print(f"WARN: Cannot resolve any download URL for {paper.filename} from paper URLs: {", ".join(paper.links)}")
+            logger.warn(f"Cannot resolve any download URL for {paper.filename} from paper URLs: {", ".join(paper.links)}")
             continue
         download_and_merge_pdfs(pdf_urls, output_path)
 
@@ -95,6 +118,7 @@ def get_pdf_url(paper_url: str) -> str | None:
     if (paper_url.endswith(".pdf")
             or paper_url.startswith("https://openreview.net/pdf")
             or paper_url.startswith("https://openreview.net/attachment")
+            or paper_url.startswith("https://dl.acm.org/doi/pdf")
     ):
         return paper_url
     if paper_url.startswith("https://arxiv.org/abs/"):
@@ -120,7 +144,7 @@ def download_and_merge_pdfs(pdf_urls: list[str], output_path: Path):
         download_pdf(pdf_url, part_path)
         parts_paths.append(part_path)
 
-    print(f"Merging {", ".join([p.name for p in parts_paths])} -> {output_path.name}")
+    logger.info(f"Merging {", ".join([p.name for p in parts_paths])} -> {output_path.name}")
     merge_pdfs(output_path, parts_paths)
 
     for part_path in parts_paths:
@@ -140,7 +164,7 @@ def merge_pdfs(output_path, pdf_paths):
 
 
 def download_pdf(pdf_url: str, output_path: Path):
-    print(f"Downloading {pdf_url} to {output_path}...")
+    logger.info(f"Downloading {pdf_url} to {output_path}...")
     
     # Create SSL context that allows legacy renegotiation.
     ssl_context = ssl.create_default_context()
@@ -173,15 +197,15 @@ def download_pdf(pdf_url: str, output_path: Path):
                 for chunk in response.iter_content(chunk_size=8192):
                     if chunk:  # Filter out keep-alive chunks
                         handle.write(chunk)
-            print(f"PDF downloaded successfully and saved to {output_path}")
+            logger.info(f"PDF downloaded successfully and saved to {output_path}")
         else:
-            print(f"Unexpected Content-Type: {content_type}")
-            print("The downloaded file is not a PDF. It might be an error page.")
+            logger.warn(f"Unexpected Content-Type: {content_type}")
+            logger.warn("The downloaded file is not a PDF. It might be an error page.")
     else:
-        print(f"Failed to download PDF. Status code: {response.status_code}")
-        print("Response Headers:", response.headers)
-        print("Response Content (first 500 characters):")
-        print(response.text[:500])
+        logger.error(f"Failed to download PDF. Status code: {response.status_code}")
+        # logger.error(f"Response Headers: {response.headers}")
+        # logger.error("Response Content (first 500 characters):")
+        # logger.error(response.text[:500])
 
 def create_example_index_file(index_file: Path):
     content = """
@@ -212,21 +236,21 @@ def run(args):
     index_file = args.index_file.resolve()
 
     if not index_file.exists():
-        print(f"Index file does not exist: {index_file}")
+        logger.warn(f"Index file does not exist: {index_file}")
         if not index_file.parent.exists():
-            print(f"Won't create the index file since the directory does not exist: {index_file.parent}")
+            logger.error(f"Won't create the index file since the directory does not exist: {index_file.parent}")
             return
-        print(f"Creating example index file... Run `papiry` again to download the papers.")
+        logger.info(f"Creating example index file... Run `papiry` again to download the papers.")
         create_example_index_file(index_file)
         return
 
     if not output_dir.exists():
-        print(f"Output directory does not exist: {output_dir}")
+        logger.error(f"Output directory does not exist: {output_dir}")
         return
 
     index = read_index(index_file)
     existing = read_existing(output_dir)
-    print(f"Found {len(index.papers)} papers in {index_file}, will download missing ones to {output_dir}...")
+    logger.info(f"Found {len(index.papers)} papers in {index_file}, will download missing ones to {output_dir}...")
     download_index(index, existing, output_dir)
 
 def main():
