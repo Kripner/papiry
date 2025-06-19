@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import re
 import ssl
+from typing import Self
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -11,10 +12,26 @@ from pypdf import PdfReader, PdfWriter
 
 # TODO: Inspired by https://github.com/metachris/pdfx/blob/master/pdfx/extractor.py, extract references from a paper
 # TODO: symlinks
-# TODO: search
-# TODO: nested sections
 # TODO: notes
 # TODO: web interface
+
+def get_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser()
+    subparsers = parser.add_subparsers(dest="command")
+
+    download = subparsers.add_parser("download", help="Download papers from the index file.")
+    search = subparsers.add_parser("search", help="Search for papers in the index file.")
+    list = subparsers.add_parser("list", help="List all papers in the index file.")
+
+    download.add_argument("-i", "--index", type=Path, default="papiry.md")
+    download.add_argument("-o", "--out_dir", type=Path, default="pdf")
+
+    search.add_argument("query", type=str)
+    search.add_argument("-i", "--index", type=Path, default="papiry.md")
+
+    list.add_argument("-i", "--index", type=Path, default="papiry.md")
+
+    return parser
 
 class Logger:
     """Singleton logger class for consistent logging throughout the application."""
@@ -38,10 +55,6 @@ class Logger:
 # Create global logger instance
 logger = Logger()
 
-parser = argparse.ArgumentParser()
-parser.add_argument("index_file", type=Path, default="papiry.md", nargs="?")
-parser.add_argument("--output_dir", type=Path, default="pdf")
-
 @dataclass
 class Section:
     name: str
@@ -52,40 +65,50 @@ class Paper:
     filename: str
     sections: list[Section]
     links: list[str]
+    line: str
 
-    def __str__(self) -> str:
-        return f"{"/".join([section.name for section in self.sections] + [self.filename])}"
+    def get_title(self) -> str:
+        result = self.line.replace(f"[{self.filename}]", "").lstrip("-")
+        for link in self.links:
+            result = result.replace(f": {link}", "")
+            result = result.replace(link, "")
+        result = result.replace("+", "")
+        return result.strip()
+
+    def get_path(self) -> Path:
+        return Path(*[section.name for section in self.sections] + [self.filename])
 
 @dataclass
 class Index:
     papers: list[Paper]
 
 
-def read_index(index_file: Path) -> Index:
-    papers = []
-    with open(index_file, "r") as f:
-        sections = []
-        for i, line in enumerate(f):
-            if line.startswith("%"):
-                continue
-            line = line.strip()
-
-            if line.startswith("#"):
-                level = len(line) - len(line.lstrip("#"))
-                name = find_inside_brackets(line[level:])
-                if name is None:
+    @classmethod
+    def read_index(cls, index_file: Path) -> Self:
+        papers = []
+        with open(index_file, "r") as f:
+            sections = []
+            for i, line in enumerate(f):
+                if line.startswith("%"):
                     continue
+                line = line.strip()
 
-                while sections and sections[-1].level >= level:
-                    sections.pop()
-                sections.append(Section(name, level))
-            elif line.startswith("-"):
-                filename = find_inside_brackets(line[1:])
-                if filename is None:
-                    continue
-                urls = find_urls(line[1:])
-                papers.append(Paper(filename, sections.copy(), urls))
-    return Index(papers)
+                if line.startswith("#"):
+                    level = len(line) - len(line.lstrip("#"))
+                    name = find_inside_brackets(line[level:])
+                    if name is None:
+                        continue
+
+                    while sections and sections[-1].level >= level:
+                        sections.pop()
+                    sections.append(Section(name, level))
+                elif line.startswith("-"):
+                    filename = find_inside_brackets(line[1:])
+                    if filename is None:
+                        continue
+                    urls = find_urls(line[1:])
+                    papers.append(Paper(filename, sections.copy(), urls, line))
+        return cls(papers)
 
 
 def find_urls(s: str) -> list[str]:
@@ -125,7 +148,7 @@ def download_index(index: Index, existing: dict[str, Path], output_dir: Path):
             existing[paper.filename].rename(output_path)
             continue
         if len(paper.links) == 0:
-            logger.warn(f"No URL found for paper {paper}")
+            logger.warn(f"No URL found for paper {paper.get_title()} ({paper.get_path()})")
             continue
         pdf_urls = [get_pdf_url(url) for url in paper.links]
         pdf_urls = [u for u in pdf_urls if u is not None]
@@ -252,32 +275,61 @@ Have fun!
     with open(index_file, "w") as f:
         f.write(content)
 
-def run(args):
-    output_dir = args.output_dir.resolve()
-    index_file = args.index_file.resolve()
+def search_index(index: Index, query: str) -> list[Paper]:
+    def normalize(s: str) -> str:
+        return s.lower()
 
-    if not index_file.exists():
-        logger.warn(f"Index file does not exist: {index_file}")
-        if not index_file.parent.exists():
-            logger.error(f"Won't create the index file since the directory does not exist: {index_file.parent}")
-            return
-        logger.info(f"Creating example index file... Run `papiry` again to download the papers.")
-        create_example_index_file(index_file)
+    query = normalize(query)
+    results = []
+    for paper in index.papers:
+        if query in normalize(paper.get_title()) or query in normalize(paper.filename):
+            results.append(paper)
+    return results
+
+def run_download(args):
+    if not args.out_dir.exists():
+        logger.error(f"Output directory does not exist: {args.out_dir}")
         return
 
-    if not output_dir.exists():
-        logger.error(f"Output directory does not exist: {output_dir}")
-        return
+    index = Index.read_index(args.index)
+    existing = read_existing(args.out_dir)
+    logger.info(f"Found {len(index.papers)} papers in {args.index}, will download missing ones to {args.out_dir}...")
+    download_index(index, existing, args.out_dir)
 
-    index = read_index(index_file)
-    existing = read_existing(output_dir)
-    logger.info(f"Found {len(index.papers)} papers in {index_file}, will download missing ones to {output_dir}...")
-    download_index(index, existing, output_dir)
+
+def run_search(args):
+    index = Index.read_index(args.index)
+    results = search_index(index, args.query)
+    for i, result in enumerate(results):
+        logger.info(f"{i + 1}. {result.get_path()}: {result.get_title()} ({", ".join(result.links)})")
+
+def run_list(args):
+    index = Index.read_index(args.index)
+    for paper in index.papers:
+        logger.info(f"{paper.get_path()}: {paper.get_title()} ({", ".join(paper.links)})")
+
 
 def main():
     """Entry point for the papiry command."""
-    args = parser.parse_args()
-    run(args)
+    args = get_parser().parse_args()
+
+    if not args.index.exists():
+        logger.warn(f"Index file does not exist: {args.index}")
+        if not args.index.parent.exists():
+            logger.error(f"Won't create the index file since the directory does not exist: {args.index.parent}")
+            return
+        logger.info(f"Creating example index file... Run `papiry` again to download the papers.")
+        create_example_index_file(args.index)
+        return
+
+    if args.command == "download":
+        run_download(args)
+    elif args.command == "search":
+        run_search(args)
+    elif args.command == "list":
+        run_list(args)
+    else:
+        logger.error(f"Unknown command: {args.command}")
 
 if __name__ == "__main__":
     main()

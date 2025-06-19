@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "papiry"
-version = "0.1.0"
+version = "0.1.1"
 description = "Tool for organizing and downloading research papers."
 authors = ["Matěj Kripner <kripner@ufal.mff.cuni.cz>"]
 license = "MIT"
